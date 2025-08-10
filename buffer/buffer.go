@@ -26,13 +26,10 @@ package buffer // import "go.uber.org/zap/buffer"
 import (
 	"strconv"
 	"time"
+	"unsafe"
 )
 
-const (
-	_size         = 1024 // by default, create 1 KiB buffers
-	_minSize      = 64   // minimum size to maintain in the pool
-	_maxExcessCap = 4    // maximum excess capacity ratio before we trim the buffer
-)
+const _size = 1024 // by default, create 1 KiB buffers
 
 // Buffer is a thin wrapper around a byte slice. It's intended to be pooled, so
 // the only way to construct one is via a Pool.
@@ -48,18 +45,53 @@ func (b *Buffer) AppendByte(v byte) {
 
 // AppendBytes writes the given slice of bytes to the Buffer.
 func (b *Buffer) AppendBytes(v []byte) {
-	if len(v) == 0 {
-		return
-	}
 	b.bs = append(b.bs, v...)
 }
 
-// AppendString writes a string to the Buffer.
+/*
+AppendString writes a string to the Buffer.
+
+Optimized for high-frequency usage in logging workloads. Uses batch copy for
+large strings to avoid repeated slice growth and to leverage memmove
+performance. Fall back to append for very small strings to avoid overhead.
+
+If the buffer has sufficient capacity, grows without reallocating.
+*/
 func (b *Buffer) AppendString(s string) {
+	// Fast path: empty string, nothing to do.
 	if len(s) == 0 {
 		return
 	}
-	b.bs = append(b.bs, s...)
+
+	l := len(b.bs)
+	needed := len(s)
+	capLeft := cap(b.bs) - l
+
+	if needed == 0 {
+		return
+	}
+
+	if capLeft >= needed {
+		// Enough capacity, can grow in-place
+		newSlice := b.bs[:l+needed]
+		copy(newSlice[l:], s)
+		b.bs = newSlice
+		return
+	}
+
+	// Not enough capacity: grow efficiently (exponential growth).
+	// Start with at least double the capacity or enough for the new string.
+	newCap := cap(b.bs) * 2
+	if newCap < l+needed {
+		newCap = l + needed
+	}
+	if newCap < _size {
+		newCap = _size
+	}
+	newBs := make([]byte, l+needed, newCap)
+	copy(newBs, b.bs)
+	copy(newBs[l:], s)
+	b.bs = newBs
 }
 
 // AppendInt appends an integer to the underlying buffer (assuming base 10).
@@ -104,9 +136,32 @@ func (b *Buffer) Bytes() []byte {
 	return b.bs
 }
 
-// String returns a string copy of the underlying byte slice.
+/*
+String returns a string copy of the underlying byte slice.
+
+This always allocates and copies the buffer data. If you want a zero-copy,
+zero-allocation string, see UnsafeString().
+*/
 func (b *Buffer) String() string {
 	return string(b.bs)
+}
+
+/*
+UnsafeString returns a zero-copy string representation of the buffer
+contents. WARNING: The returned string aliases the underlying buffer memory,
+so it is only valid until the buffer is next modified or returned to its pool.
+
+This method uses unsafe pointer conversions to achieve zero allocations. Use
+this only when the consumer will not keep or reference the string beyond this
+buffer's next modification.
+*/
+func (b *Buffer) UnsafeString() string {
+	var s string
+	bsHdr := (*[2]uintptr)(unsafe.Pointer(&b.bs))
+	strHdr := (*[2]uintptr)(unsafe.Pointer(&s))
+	strHdr[0] = bsHdr[0]
+	strHdr[1] = uintptr(len(b.bs))
+	return s
 }
 
 // Reset resets the underlying byte slice. Subsequent writes re-use the slice's
@@ -115,30 +170,8 @@ func (b *Buffer) Reset() {
 	b.bs = b.bs[:0]
 }
 
-// EnsureCapacity ensures the buffer has at least the specified capacity.
-// If the current buffer capacity is less than the requested capacity,
-// the buffer will grow to accommodate it without multiple allocations.
-func (b *Buffer) EnsureCapacity(capacity int) {
-	if cap(b.bs) < capacity {
-		// Create a new buffer with the desired capacity
-		newBs := make([]byte, len(b.bs), capacity)
-		copy(newBs, b.bs)
-		b.bs = newBs
-	}
-}
-
 // Write implements io.Writer.
 func (b *Buffer) Write(bs []byte) (int, error) {
-	if len(bs) == 0 {
-		return 0, nil
-	}
-	
-	// Pre-grow the buffer if necessary to avoid multiple allocations
-	requiredCap := len(b.bs) + len(bs)
-	if cap(b.bs) < requiredCap {
-		b.EnsureCapacity(requiredCap)
-	}
-	
 	b.bs = append(b.bs, bs...)
 	return len(bs), nil
 }
@@ -157,16 +190,6 @@ func (b *Buffer) WriteByte(v byte) error {
 // Error returned is always nil, function signature is compatible
 // with bytes.Buffer and bufio.Writer
 func (b *Buffer) WriteString(s string) (int, error) {
-	if len(s) == 0 {
-		return 0, nil
-	}
-	
-	// Pre-grow the buffer if necessary to avoid multiple allocations
-	requiredCap := len(b.bs) + len(s)
-	if cap(b.bs) < requiredCap {
-		b.EnsureCapacity(requiredCap)
-	}
-	
 	b.AppendString(s)
 	return len(s), nil
 }
@@ -181,27 +204,8 @@ func (b *Buffer) TrimNewline() {
 }
 
 // Free returns the Buffer to its Pool.
-// 
-// If the buffer capacity has grown too large,
-// it will be trimmed before returning to the pool to avoid
-// holding onto excessive memory.
 //
 // Callers must not retain references to the Buffer after calling Free.
 func (b *Buffer) Free() {
-	// Optimize memory usage by trimming excessively large buffers
-	// to avoid keeping large unused buffers in the pool
-	currentCap := cap(b.bs)
-	
-	// If the buffer has grown too large, replace it with a smaller one
-	// but still maintain a reasonable minimum size
-	if currentCap > _size*_maxExcessCap {
-		// Allocate a new buffer with the default size
-		// We don't preserve the contents since this buffer is being freed
-		b.bs = make([]byte, 0, _size)
-	} else if len(b.bs) > 0 {
-		// Otherwise just reset the buffer, keeping the capacity
-		b.Reset()
-	}
-	
 	b.pool.put(b)
 }

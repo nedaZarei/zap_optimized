@@ -21,7 +21,6 @@
 package zapcore
 
 import (
-	"bytes"
 	"encoding/json"
 	"io"
 	"time"
@@ -75,23 +74,17 @@ func CapitalColorLevelEncoder(l Level, enc PrimitiveArrayEncoder) {
 	enc.AppendString(s)
 }
 
-var (
-	_levelEncoderCapital      = []byte("capital")
-	_levelEncoderCapitalColor = []byte("capitalColor")
-	_levelEncoderColor        = []byte("color")
-)
-
 // UnmarshalText unmarshals text to a LevelEncoder. "capital" is unmarshaled to
 // CapitalLevelEncoder, "coloredCapital" is unmarshaled to CapitalColorLevelEncoder,
 // "colored" is unmarshaled to LowercaseColorLevelEncoder, and anything else
 // is unmarshaled to LowercaseLevelEncoder.
 func (e *LevelEncoder) UnmarshalText(text []byte) error {
-	switch {
-	case bytes.Equal(text, _levelEncoderCapital):
+	switch string(text) {
+	case "capital":
 		*e = CapitalLevelEncoder
-	case bytes.Equal(text, _levelEncoderCapitalColor):
+	case "capitalColor":
 		*e = CapitalColorLevelEncoder
-	case bytes.Equal(text, _levelEncoderColor):
+	case "color":
 		*e = LowercaseColorLevelEncoder
 	default:
 		*e = LowercaseLevelEncoder
@@ -174,17 +167,6 @@ func TimeEncoderOfLayout(layout string) TimeEncoder {
 	}
 }
 
-var (
-	_timeEncoderRFC3339NanoLower = []byte("rfc3339nano")
-	_timeEncoderRFC3339Nano      = []byte("RFC3339Nano")
-	_timeEncoderRFC3339Lower     = []byte("rfc3339")
-	_timeEncoderRFC3339          = []byte("RFC3339")
-	_timeEncoderIso8601Lower     = []byte("iso8601")
-	_timeEncoderIso8601          = []byte("ISO8601")
-	_timeEncoderMillis           = []byte("millis")
-	_timeEncoderNanos            = []byte("nanos")
-)
-
 // UnmarshalText unmarshals text to a TimeEncoder.
 // "rfc3339nano" and "RFC3339Nano" are unmarshaled to RFC3339NanoTimeEncoder.
 // "rfc3339" and "RFC3339" are unmarshaled to RFC3339TimeEncoder.
@@ -193,16 +175,16 @@ var (
 // "nanos" is unmarshaled to EpochNanosEncoder.
 // Anything else is unmarshaled to EpochTimeEncoder.
 func (e *TimeEncoder) UnmarshalText(text []byte) error {
-	switch {
-	case bytes.Equal(text, _timeEncoderRFC3339NanoLower), bytes.Equal(text, _timeEncoderRFC3339Nano):
+	switch string(text) {
+	case "rfc3339nano", "RFC3339Nano":
 		*e = RFC3339NanoTimeEncoder
-	case bytes.Equal(text, _timeEncoderRFC3339Lower), bytes.Equal(text, _timeEncoderRFC3339):
+	case "rfc3339", "RFC3339":
 		*e = RFC3339TimeEncoder
-	case bytes.Equal(text, _timeEncoderIso8601Lower), bytes.Equal(text, _timeEncoderIso8601):
+	case "iso8601", "ISO8601":
 		*e = ISO8601TimeEncoder
-	case bytes.Equal(text, _timeEncoderMillis):
+	case "millis":
 		*e = EpochMillisTimeEncoder
-	case bytes.Equal(text, _timeEncoderNanos):
+	case "nanos":
 		*e = EpochNanosTimeEncoder
 	default:
 		*e = EpochTimeEncoder
@@ -271,22 +253,16 @@ func StringDurationEncoder(d time.Duration, enc PrimitiveArrayEncoder) {
 	enc.AppendString(d.String())
 }
 
-var (
-	_durationEncoderString = []byte("string")
-	_durationEncoderNanos  = []byte("nanos")
-	_durationEncoderMs     = []byte("ms")
-)
-
 // UnmarshalText unmarshals text to a DurationEncoder. "string" is unmarshaled
 // to StringDurationEncoder, and anything else is unmarshaled to
 // NanosDurationEncoder.
 func (e *DurationEncoder) UnmarshalText(text []byte) error {
-	switch {
-	case bytes.Equal(text, _durationEncoderString):
+	switch string(text) {
+	case "string":
 		*e = StringDurationEncoder
-	case bytes.Equal(text, _durationEncoderNanos):
+	case "nanos":
 		*e = NanosDurationEncoder
-	case bytes.Equal(text, _durationEncoderMs):
+	case "ms":
 		*e = MillisDurationEncoder
 	default:
 		*e = SecondsDurationEncoder
@@ -314,15 +290,11 @@ func ShortCallerEncoder(caller EntryCaller, enc PrimitiveArrayEncoder) {
 	enc.AppendString(caller.TrimmedPath())
 }
 
-var (
-	_callerEncoderFull = []byte("full")
-)
-
 // UnmarshalText unmarshals text to a CallerEncoder. "full" is unmarshaled to
 // FullCallerEncoder and anything else is unmarshaled to ShortCallerEncoder.
 func (e *CallerEncoder) UnmarshalText(text []byte) error {
-	switch {
-	case bytes.Equal(text, _callerEncoderFull):
+	switch string(text) {
+	case "full":
 		*e = FullCallerEncoder
 	default:
 		*e = ShortCallerEncoder
@@ -342,15 +314,11 @@ func FullNameEncoder(loggerName string, enc PrimitiveArrayEncoder) {
 	enc.AppendString(loggerName)
 }
 
-var (
-	_nameEncoderFull = []byte("full")
-)
-
 // UnmarshalText unmarshals text to a NameEncoder. Currently, everything is
 // unmarshaled to FullNameEncoder.
 func (e *NameEncoder) UnmarshalText(text []byte) error {
-	switch {
-	case bytes.Equal(text, _nameEncoderFull):
+	switch string(text) {
+	case "full":
 		*e = FullNameEncoder
 	default:
 		*e = FullNameEncoder

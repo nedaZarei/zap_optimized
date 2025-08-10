@@ -92,12 +92,10 @@ const (
 	ErrorType
 	// SkipType indicates that the field is a no-op.
 	SkipType
+
 	// InlineMarshalerType indicates that the field carries an ObjectMarshaler
 	// that should be inlined.
 	InlineMarshalerType
-	// SafeStringerType indicates that the field carries a fmt.Stringer that is
-	// guaranteed by the developer to be non-panicking.
-	SafeStringerType
 )
 
 // A Field is a marshaling operation used to add a key-value pair to a logger's
@@ -174,9 +172,6 @@ func (f Field) AddTo(enc ObjectEncoder) {
 		enc.OpenNamespace(f.Key)
 	case StringerType:
 		err = encodeStringer(f.Key, f.Interface, enc)
-	case SafeStringerType:
-		// Fast path for trusted fmt.Stringer implementations
-		enc.AddString(f.Key, f.Interface.(fmt.Stringer).String())
 	case ErrorType:
 		err = encodeError(f.Key, f.Interface.(error), enc)
 	case SkipType:

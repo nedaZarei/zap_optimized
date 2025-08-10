@@ -21,6 +21,7 @@
 package zapcore
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 )
@@ -59,28 +60,6 @@ const (
 	InvalidLevel = _maxLevel + 1
 )
 
-// Preallocated string values for fast lookup in String and CapitalString.
-var (
-	levelNames = [...]string{
-		"debug",  // DebugLevel = -1
-		"info",   // InfoLevel = 0
-		"warn",   // WarnLevel = 1
-		"error",  // ErrorLevel = 2
-		"dpanic", // DPanicLevel = 3
-		"panic",  // PanicLevel = 4
-		"fatal",  // FatalLevel = 5
-	}
-	levelNamesCaps = [...]string{
-		"DEBUG",  // DebugLevel = -1
-		"INFO",   // InfoLevel = 0
-		"WARN",   // WarnLevel = 1
-		"ERROR",  // ErrorLevel = 2
-		"DPANIC", // DPanicLevel = 3
-		"PANIC",  // PanicLevel = 4
-		"FATAL",  // FatalLevel = 5
-	}
-)
-
 // ParseLevel parses a level based on the lower-case or all-caps ASCII
 // representation of the log level. If the provided ASCII representation is
 // invalid an error is returned.
@@ -117,12 +96,10 @@ type leveledEnabler interface {
 //		return zapcore.LevelOf(c.wrappedCore)
 //	}
 func LevelOf(enab LevelEnabler) Level {
-	// Fast path: underlying type exposes Level() Level
 	if lvler, ok := enab.(leveledEnabler); ok {
 		return lvler.Level()
 	}
 
-	// Fast iteration with constants to avoid unnecessary allocations/logic
 	for lvl := _minLevel; lvl <= _maxLevel; lvl++ {
 		if enab.Enabled(lvl) {
 			return lvl
@@ -134,51 +111,54 @@ func LevelOf(enab LevelEnabler) Level {
 
 // String returns a lower-case ASCII representation of the log level.
 func (l Level) String() string {
-	idx := int(l - DebugLevel)
-	if idx >= 0 && idx < len(levelNames) {
-		return levelNames[idx]
+	switch l {
+	case DebugLevel:
+		return "debug"
+	case InfoLevel:
+		return "info"
+	case WarnLevel:
+		return "warn"
+	case ErrorLevel:
+		return "error"
+	case DPanicLevel:
+		return "dpanic"
+	case PanicLevel:
+		return "panic"
+	case FatalLevel:
+		return "fatal"
+	default:
+		return fmt.Sprintf("Level(%d)", l)
 	}
-	return fmt.Sprintf("Level(%d)", l)
 }
 
 // CapitalString returns an all-caps ASCII representation of the log level.
 func (l Level) CapitalString() string {
-	idx := int(l - DebugLevel)
-	if idx >= 0 && idx < len(levelNamesCaps) {
-		return levelNamesCaps[idx]
+	// Printing levels in all-caps is common enough that we should export this
+	// functionality.
+	switch l {
+	case DebugLevel:
+		return "DEBUG"
+	case InfoLevel:
+		return "INFO"
+	case WarnLevel:
+		return "WARN"
+	case ErrorLevel:
+		return "ERROR"
+	case DPanicLevel:
+		return "DPANIC"
+	case PanicLevel:
+		return "PANIC"
+	case FatalLevel:
+		return "FATAL"
+	default:
+		return fmt.Sprintf("LEVEL(%d)", l)
 	}
-	return fmt.Sprintf("LEVEL(%d)", l)
 }
 
 // MarshalText marshals the Level to text. Note that the text representation
 // drops the -Level suffix (see example).
 func (l Level) MarshalText() ([]byte, error) {
 	return []byte(l.String()), nil
-}
-
-// caseInsensitiveEquals compares two []byte ignoring ASCII case.
-// This avoids allocations of lowercased copies during UnmarshalText.
-func caseInsensitiveEquals(a, b []byte) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i, c := range a {
-		bc := b[i]
-		if c == bc {
-			continue
-		}
-		// Upper-to-lower ASCII only
-		if 'A' <= c && c <= 'Z' {
-			c = c + 32
-		}
-		if 'A' <= bc && bc <= 'Z' {
-			bc = bc + 32
-		}
-		if c != bc {
-			return false
-		}
-	}
-	return true
 }
 
 // UnmarshalText unmarshals text to a level. Like MarshalText, UnmarshalText
@@ -191,33 +171,32 @@ func (l *Level) UnmarshalText(text []byte) error {
 	if l == nil {
 		return errUnmarshalNilLevel
 	}
-	// Optimize for Go's zero-value: empty string becomes InfoLevel.
-	// Avoid allocations by inlining.
-	switch {
-	case caseInsensitiveEquals(text, []byte("debug")):
-		*l = DebugLevel
-		return nil
-	case caseInsensitiveEquals(text, []byte("info")), len(text) == 0: // make the zero value useful
-		*l = InfoLevel
-		return nil
-	case caseInsensitiveEquals(text, []byte("warn")), caseInsensitiveEquals(text, []byte("warning")):
-		*l = WarnLevel
-		return nil
-	case caseInsensitiveEquals(text, []byte("error")):
-		*l = ErrorLevel
-		return nil
-	case caseInsensitiveEquals(text, []byte("dpanic")):
-		*l = DPanicLevel
-		return nil
-	case caseInsensitiveEquals(text, []byte("panic")):
-		*l = PanicLevel
-		return nil
-	case caseInsensitiveEquals(text, []byte("fatal")):
-		*l = FatalLevel
-		return nil
-	default:
+	if !l.unmarshalText(text) && !l.unmarshalText(bytes.ToLower(text)) {
 		return fmt.Errorf("unrecognized level: %q", text)
 	}
+	return nil
+}
+
+func (l *Level) unmarshalText(text []byte) bool {
+	switch string(text) {
+	case "debug":
+		*l = DebugLevel
+	case "info", "": // make the zero value useful
+		*l = InfoLevel
+	case "warn", "warning":
+		*l = WarnLevel
+	case "error":
+		*l = ErrorLevel
+	case "dpanic":
+		*l = DPanicLevel
+	case "panic":
+		*l = PanicLevel
+	case "fatal":
+		*l = FatalLevel
+	default:
+		return false
+	}
+	return true
 }
 
 // Set sets the level for the flag.Value interface.

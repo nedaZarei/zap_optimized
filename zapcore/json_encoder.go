@@ -23,7 +23,6 @@ package zapcore
 import (
 	"encoding/base64"
 	"math"
-	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -39,42 +38,15 @@ var _jsonPool = pool.New(func() *jsonEncoder {
 	return &jsonEncoder{}
 })
 
-// reflectEncoderPool holds pre-initialized pairs of reflection buffers and encoders
-type reflectEncoderPair struct {
-	buf *buffer.Buffer
-	enc ReflectedEncoder
-}
-
-var _reflectPool = sync.Pool{
-	New: func() interface{} {
-		return &reflectEncoderPair{
-			buf: bufferpool.Get(),
-		}
-	},
-}
-
-func getReflectEncoderPair(cfg *EncoderConfig) *reflectEncoderPair {
-	pair := _reflectPool.Get().(*reflectEncoderPair)
-	if pair.enc == nil && cfg.NewReflectedEncoder != nil {
-		pair.enc = cfg.NewReflectedEncoder(pair.buf)
-	}
-	return pair
-}
-
-func putReflectEncoderPair(pair *reflectEncoderPair) {
-	pair.buf.Reset()
-	_reflectPool.Put(pair)
-}
-
 func putJSONEncoder(enc *jsonEncoder) {
 	if enc.reflectBuf != nil {
 		enc.reflectBuf.Free()
-		enc.reflectBuf = nil
 	}
 	enc.EncoderConfig = nil
 	enc.buf = nil
 	enc.spaced = false
 	enc.openNamespaces = 0
+	enc.reflectBuf = nil
 	enc.reflectEnc = nil
 	_jsonPool.Put(enc)
 }
@@ -181,18 +153,8 @@ func (enc *jsonEncoder) AddInt64(key string, val int64) {
 
 func (enc *jsonEncoder) resetReflectBuf() {
 	if enc.reflectBuf == nil {
-		// Get a pre-initialized pair from the pool
-		pair := getReflectEncoderPair(enc.EncoderConfig)
-		enc.reflectBuf = pair.buf
-		
-		// If the encoder needs to be created
-		if pair.enc == nil {
-			pair.enc = enc.NewReflectedEncoder(enc.reflectBuf)
-			// Store back in the pair for future reuse
-			_reflectPool.Put(pair)
-		}
-		
-		enc.reflectEnc = pair.enc
+		enc.reflectBuf = bufferpool.Get()
+		enc.reflectEnc = enc.NewReflectedEncoder(enc.reflectBuf)
 	} else {
 		enc.reflectBuf.Reset()
 	}
@@ -314,7 +276,8 @@ func (enc *jsonEncoder) AppendDuration(val time.Duration) {
 
 func (enc *jsonEncoder) AppendInt64(val int64) {
 	enc.addElementSeparator()
-	enc.buf.AppendInt(val)
+	// Custom optimized int64 to string conversion, avoiding strconv.
+	enc.buf.AppendBytes(itoa64(val))
 }
 
 func (enc *jsonEncoder) AppendReflected(val interface{}) error {
@@ -355,11 +318,9 @@ func (enc *jsonEncoder) AppendTime(val time.Time) {
 
 func (enc *jsonEncoder) AppendUint64(val uint64) {
 	enc.addElementSeparator()
-	enc.buf.AppendUint(val)
+	// Custom optimized uint64 to string conversion, avoiding strconv.
+	enc.buf.AppendBytes(utoa64(val))
 }
-
-// The following methods are now declared as inlinable (single line, no logic)
-// by design, making them good inlining candidates for the Go compiler:
 
 func (enc *jsonEncoder) AddInt(k string, v int)         { enc.AddInt64(k, int64(v)) }
 func (enc *jsonEncoder) AddInt32(k string, v int32)     { enc.AddInt64(k, int64(v)) }
@@ -524,7 +485,8 @@ func (enc *jsonEncoder) appendFloat(val float64, bitSize int) {
 }
 
 // safeAddString JSON-escapes a string and appends it to the internal buffer.
-// Declared as a single-line wrapper for inlining.
+// Unlike the standard library's encoder, it doesn't attempt to protect the
+// user from browser vulnerabilities or JSONP-related problems.
 func (enc *jsonEncoder) safeAddString(s string) {
 	safeAppendStringLike(
 		(*buffer.Buffer).AppendString,
@@ -535,7 +497,6 @@ func (enc *jsonEncoder) safeAddString(s string) {
 }
 
 // safeAddByteString is no-alloc equivalent of safeAddString(string(s)) for s []byte.
-// Declared as a single-line wrapper for inlining.
 func (enc *jsonEncoder) safeAddByteString(s []byte) {
 	safeAppendStringLike(
 		(*buffer.Buffer).AppendBytes,
@@ -545,9 +506,55 @@ func (enc *jsonEncoder) safeAddByteString(s []byte) {
 	)
 }
 
+//
+// -------- Custom optimized integer to ASCII decimal -----------
+// itoa64 returns the ASCII string form for an int64 with minimal allocations.
+// Handles negatives and zero efficiently. No strconv or fmt.
+//
+func itoa64(i int64) []byte {
+	var buf [20]byte // int64 is at most 19 digits plus sign
+	pos := len(buf)
+	neg := false
+	u := uint64(i)
+	if i < 0 {
+		neg = true
+		u = -u
+	}
+	if u == 0 {
+		pos--
+		buf[pos] = '0'
+	}
+	for u > 0 {
+		pos--
+		buf[pos] = byte('0' + u%10)
+		u /= 10
+	}
+	if neg {
+		pos--
+		buf[pos] = '-'
+	}
+	return buf[pos:]
+}
+
+// utoa64 returns the ASCII string form for a uint64 with minimal allocations.
+func utoa64(u uint64) []byte {
+	var buf [20]byte
+	pos := len(buf)
+	if u == 0 {
+		pos--
+		buf[pos] = '0'
+	}
+	for u > 0 {
+		pos--
+		buf[pos] = byte('0' + u%10)
+		u /= 10
+	}
+	return buf[pos:]
+}
+
 // safeAppendStringLike is a generic implementation of safeAddString and safeAddByteString.
 // It appends a string or byte slice to the buffer, escaping all special characters.
-func safeAppendStringLike[S ~[]byte | string](
+func safeAppendStringLike[S []byte | string](
 	// appendTo appends this string-like object to the buffer.
 	appendTo func(*buffer.Buffer, S),
 	// decodeRune decodes the next rune from the string-like object

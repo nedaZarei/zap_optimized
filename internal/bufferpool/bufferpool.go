@@ -22,28 +22,10 @@
 // packages can recreate the same functionality with buffers.NewPool.
 package bufferpool
 
-import (
-	"sync"
-	"go.uber.org/zap/buffer"
-)
+import "go.uber.org/zap/buffer"
 
 var (
-	// _pool is replaced by sync.Pool for more efficient pool instance,
-	// avoiding per-package pool allocations as in the original buffer.NewPool.
-	_pool = sync.Pool{
-		New: func() interface{} {
-			return buffer.NewPool().Get()
-		},
-	}
+	_pool = buffer.NewPool()
 	// Get retrieves a buffer from the pool, creating one if necessary.
-	Get = func() *buffer.Buffer {
-		buf := _pool.Get().(*buffer.Buffer)
-		// Leave reset to NewPool/Buffer lifecycle
-		return buf
-	}
-	// Put can be optionally used to return buffer to the pool to minimize growth/GC.
-	Put = func(buf *buffer.Buffer) {
-		buf.Reset()
-		_pool.Put(buf)
-	}
+	Get = _pool.Get
 )

@@ -35,7 +35,7 @@ import (
 var _cePool = pool.New(func() *CheckedEntry {
 	// Pre-allocate some space for cores.
 	return &CheckedEntry{
-		cores: make([]Core, 0, 4),
+		cores: make([]Core, 4),
 	}
 })
 
@@ -220,6 +220,10 @@ func (ce *CheckedEntry) reset() {
 	ce.ErrorOutput = nil
 	ce.dirty = false
 	ce.after = nil
+	for i := range ce.cores {
+		// don't keep references to cores
+		ce.cores[i] = nil
+	}
 	ce.cores = ce.cores[:0]
 }
 
